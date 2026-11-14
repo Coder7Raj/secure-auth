@@ -14,7 +14,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:status": "prisma migrate status",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "db:check": "node src/scripts/check-db.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
