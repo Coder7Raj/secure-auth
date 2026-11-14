@@ -1,0 +1,272 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+// ==========================================
+// USER
+// ==========================================
+
+model User {
+  id           String @id @default(uuid()) @db.Uuid
+  email        String @unique @db.VarChar(254)
+  passwordHash String @db.VarChar(255)
+
+  firstName String? @db.VarChar(80)
+  lastName  String? @db.VarChar(80)
+
+  status UserStatus @default(PENDING_VERIFICATION)
+
+  emailVerifiedAt   DateTime?
+  passwordChangedAt DateTime?
+  lastLoginAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relationships
+  roles                   UserRole[]
+  sessions                Session[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  loginAttempts           LoginAttempt[]
+
+  auditLogsAsActor  AuditLog[] @relation("AuditActor")
+  auditLogsAsTarget AuditLog[] @relation("AuditTarget")
+
+  @@index([status, createdAt])
+  @@map("users")
+}
+
+// ==========================================
+// ROLE
+// ==========================================
+
+model Role {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @unique @db.VarChar(50)
+  description String? @db.VarChar(255)
+
+  isSystem Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+// ==========================================
+// PERMISSION
+// ==========================================
+
+model Permission {
+  id          String  @id @default(uuid()) @db.Uuid
+  key         String  @unique @db.VarChar(100)
+  description String? @db.VarChar(255)
+
+  createdAt DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+// ==========================================
+// USER ROLE
+// ==========================================
+
+model UserRole {
+  userId String @db.Uuid
+  roleId String @db.Uuid
+
+  assignedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+// ==========================================
+// ROLE PERMISSION
+// ==========================================
+
+model RolePermission {
+  roleId       String @db.Uuid
+  permissionId String @db.Uuid
+
+  assignedAt DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+// ==========================================
+// SESSION
+// ==========================================
+
+model Session {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+
+  ipAddress  String? @db.VarChar(45)
+  userAgent  String? @db.VarChar(512)
+  deviceName String? @db.VarChar(150)
+
+  createdAt    DateTime  @default(now())
+  lastSeenAt   DateTime  @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  revokeReason String?   @db.VarChar(100)
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// ==========================================
+// REFRESH TOKEN
+// ==========================================
+
+model RefreshToken {
+  id        String @id @default(uuid()) @db.Uuid
+  sessionId String @db.Uuid
+
+  tokenHash String @unique @db.VarChar(128)
+  familyId  String @db.Uuid
+
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  consumedAt DateTime?
+  revokedAt  DateTime?
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, familyId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+// ==========================================
+// EMAIL VERIFICATION TOKEN
+// ==========================================
+
+model EmailVerificationToken {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+
+  tokenHash String @unique @db.VarChar(128)
+
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("email_verification_tokens")
+}
+
+// ==========================================
+// PASSWORD RESET TOKEN
+// ==========================================
+
+model PasswordResetToken {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+
+  tokenHash String @unique @db.VarChar(128)
+
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("password_reset_tokens")
+}
+
+// ==========================================
+// LOGIN ATTEMPT
+// ==========================================
+
+model LoginAttempt {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String? @db.Uuid
+  email  String  @db.VarChar(254)
+
+  ipAddress String? @db.VarChar(45)
+  userAgent String? @db.VarChar(512)
+
+  success       Boolean
+  failureReason String? @db.VarChar(80)
+
+  attemptedAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([email, attemptedAt])
+  @@index([ipAddress, attemptedAt])
+  @@index([userId, attemptedAt])
+  @@map("login_attempts")
+}
+
+// ==========================================
+// AUDIT LOG
+// ==========================================
+
+model AuditLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  actorUserId  String? @db.Uuid
+  targetUserId String? @db.Uuid
+
+  action     String  @db.VarChar(100)
+  resource   String? @db.VarChar(100)
+  resourceId String? @db.VarChar(100)
+
+  ipAddress String? @db.VarChar(45)
+  userAgent String? @db.VarChar(512)
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  actor  User? @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  target User? @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorUserId, createdAt])
+  @@index([targetUserId, createdAt])
+  @@index([action, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
