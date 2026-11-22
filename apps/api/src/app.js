@@ -36,11 +36,31 @@ app.use(
   }),
 );
 
-app.use(helmet());
+app.use(
+  helmet({
+    hsts:
+      env.NODE_ENV === "production"
+        ? {
+            maxAge: 31536000, // 1 year
+            includeSubDomains: false,
+          }
+        : false,
+  }),
+);
 
 app.use(
   cors({
-    origin: env.CLIENT_URL,
+    origin(origin, callback) {
+      if (!origin) {
+        return callback(null, false);
+      }
+
+      if (origin === env.CLIENT_URL) {
+        return callback(null, true);
+      }
+
+      return callback(null, false);
+    },
     credentials: true,
   }),
 );
