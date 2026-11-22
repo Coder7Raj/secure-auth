@@ -16,6 +16,26 @@ const app = express();
 
 app.disable("x-powered-by");
 
+// Request logger — deliberately excludes sensitive request data.
+app.use(
+  pinoHttp({
+    serializers: {
+      req(req) {
+        return {
+          id: req.id,
+          method: req.method,
+        };
+      },
+
+      res(res) {
+        return {
+          statusCode: res.statusCode,
+        };
+      },
+    },
+  }),
+);
+
 app.use(helmet());
 
 app.use(
@@ -29,8 +49,6 @@ app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: false, limit: "10kb" }));
 
 app.use(cookieParser());
-
-app.use(pinoHttp());
 
 app.use("/api/v1", apiRoutes);
 

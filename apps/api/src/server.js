@@ -4,12 +4,40 @@ import { prisma } from "./lib/prisma.js";
 
 await prisma.$connect();
 
-const server = app.listen(env.PORT, () => {
+const server = app.listen(env.PORT);
+
+server.on("listening", () => {
   console.log(`SecureAuth API running on port ${env.PORT} (${env.NODE_ENV})`);
 });
 
+// Handle startup/listening errors.
+server.once("error", async (error) => {
+  console.error("HTTP server startup failed:", error);
+
+  try {
+    await prisma.$disconnect();
+  } catch (disconnectError) {
+    console.error("Database shutdown failed:", disconnectError);
+  }
+
+  process.exitCode = 1;
+});
+
+let isShuttingDown = false;
+
 function shutdown(signal) {
+  if (isShuttingDown) {
+    return;
+  }
+
+  isShuttingDown = true;
+
   console.log(`${signal} received. Shutting down...`);
+
+  const shutdownTimer = setTimeout(() => {
+    console.error("Graceful shutdown timed out. Forcing exit.");
+    process.exit(1);
+  }, 10_000);
 
   server.close(async (error) => {
     try {
@@ -26,6 +54,8 @@ function shutdown(signal) {
     } catch (disconnectError) {
       console.error("Database shutdown failed:", disconnectError);
       process.exitCode = 1;
+    } finally {
+      clearTimeout(shutdownTimer);
     }
   });
 }
