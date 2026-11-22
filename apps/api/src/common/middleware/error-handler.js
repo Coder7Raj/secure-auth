@@ -1,11 +1,11 @@
-export function notFoundHandler(req, res, next) {
+export function notFoundHandler(req, res, _next) {
   res.status(404).json({
     success: false,
     message: "Route not found",
   });
 }
 
-export function errorHandler(err, req, res, next) {
+export function errorHandler(err, req, res, _next) {
   const statusCode = err.statusCode || 500;
 
   if (statusCode >= 500) {

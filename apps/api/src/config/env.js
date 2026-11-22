@@ -6,11 +6,24 @@ const envSchema = z.object({
     .enum(["development", "test", "production"])
     .default("development"),
 
-  PORT: z.coerce.number().int().positive().default(5000),
+  PORT: z.coerce.number().int().min(1).max(65535).default(5000),
 
-  CLIENT_URL: z.string().url(),
+  CLIENT_URL: z
+    .string()
+    .url()
+    .refine((value) => ["http:", "https:"].includes(new URL(value).protocol), {
+      message: "CLIENT_URL must use HTTP or HTTPS",
+    }),
 
-  DATABASE_URL: z.string().min(1),
+  DATABASE_URL: z
+    .string()
+    .url()
+    .refine(
+      (value) => ["postgres:", "postgresql:"].includes(new URL(value).protocol),
+      {
+        message: "DATABASE_URL must be a PostgreSQL connection URL",
+      },
+    ),
 });
 
 const result = envSchema.safeParse(process.env);
