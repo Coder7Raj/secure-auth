@@ -85,3 +85,11 @@ export async function resetAccountThrottle(email) {
     where: { key: accountKey },
   });
 }
+
+export async function resetIpThrottle(ipAddress) {
+  const ipKey = createThrottleKey("ip", ipAddress);
+
+  await prisma.loginThrottle.deleteMany({
+    where: { key: ipKey },
+  });
+}

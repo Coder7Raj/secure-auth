@@ -1,16 +1,19 @@
 import { prisma } from "./apps/api/src/lib/prisma.js";
 
-const attempt = await prisma.loginAttempt.findFirst({
-  where: { email: "raj.test01@example.com" },
-  orderBy: { attemptedAt: "desc" },
+const records = await prisma.loginThrottle.findMany({
   select: {
-    ipAddress: true,
-    userAgent: true,
-    success: true,
-    failureReason: true,
+    key: true,
+    attempts: true,
+    expiresAt: true,
   },
 });
 
-console.log(attempt);
+console.table(
+  records.map((record) => ({
+    keyPrefix: record.key.split(":")[0],
+    attempts: record.attempts,
+    expiresAt: record.expiresAt,
+  })),
+);
 
 await prisma.$disconnect();
