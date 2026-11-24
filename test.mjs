@@ -1,15 +1,16 @@
-import argon2 from "argon2";
+import { prisma } from "./apps/api/src/lib/prisma.js";
 
-const dummyHash = await argon2.hash(
-  "SecureAuth-Dummy-Password-Never-Used-For-Login",
-  {
-    type: argon2.argon2id,
-    memoryCost: 65536,
-    timeCost: 3,
-    parallelism: 1,
-    hashLength: 32,
+const attempt = await prisma.loginAttempt.findFirst({
+  where: { email: "raj.test01@example.com" },
+  orderBy: { attemptedAt: "desc" },
+  select: {
+    ipAddress: true,
+    userAgent: true,
+    success: true,
+    failureReason: true,
   },
-);
+});
 
-console.log("DUMMY_ARGON2_HASH:");
-console.log(dummyHash);
+console.log(attempt);
+
+await prisma.$disconnect();

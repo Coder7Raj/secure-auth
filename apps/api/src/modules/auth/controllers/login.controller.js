@@ -16,7 +16,10 @@ export async function loginController(req, res, next) {
   }
 
   try {
-    const user = await loginUser(validation.data);
+    const user = await loginUser(validation.data, {
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
 
     return res.status(200).json({
       success: true,
