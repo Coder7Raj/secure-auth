@@ -1,4 +1,8 @@
 import { prisma } from "../../../lib/prisma.js";
+import {
+  consumeLoginAttempt,
+  resetAccountThrottle,
+} from "./login-throttle.service.js";
 import { verifyPassword } from "./password.service.js";
 
 const DUMMY_PASSWORD_HASH =
@@ -32,6 +36,25 @@ async function recordLoginAttempt({
 
 export async function loginUser(data, metadata = {}) {
   const { ipAddress = null, userAgent = null } = metadata;
+
+  const throttle = await consumeLoginAttempt({
+    email: data.email,
+    ipAddress,
+  });
+
+  if (!throttle.allowed) {
+    const error = createAuthError(
+      "Too many login requests. Please try again later.",
+      429,
+    );
+
+    error.retryAfterSeconds = Math.max(
+      1,
+      Math.ceil((throttle.retryAt.getTime() - Date.now()) / 1000),
+    );
+
+    throw error;
+  }
 
   const user = await prisma.user.findUnique({
     where: { email: data.email },
@@ -111,6 +134,8 @@ export async function loginUser(data, metadata = {}) {
     userAgent,
     success: true,
   });
+
+  await resetAccountThrottle(user.email);
 
   return {
     id: user.id,
