@@ -45,6 +45,8 @@ const envSchema = z
     JWT_ISSUER: z.string().min(1).default("secure-auth-api"),
 
     JWT_AUDIENCE: z.string().min(1).default("secure-auth-api"),
+
+    SESSION_MAX_AGE_DAYS: z.coerce.number().int().positive().default(7),
   })
   .superRefine((config, ctx) => {
     if (
