@@ -18,6 +18,55 @@ const sessionInputSchema = z.object({
   deviceName: z.string().max(150).nullable().optional(),
 });
 
+const listActiveSessionsInputSchema = z.object({
+  userId: z.string().uuid(),
+});
+
+/**
+ * List all currently active sessions belonging to a user.
+ *
+ * Revoked sessions, expired sessions, and sessions belonging
+ * to inactive users are excluded.
+ *
+ * Refresh tokens and token hashes are never returned.
+ */
+export async function listActiveSessions(input) {
+  const validatedInput = listActiveSessionsInputSchema.parse(input);
+
+  const now = new Date();
+
+  const sessions = await prisma.session.findMany({
+    where: {
+      userId: validatedInput.userId,
+      revokedAt: null,
+      expiresAt: {
+        gt: now,
+      },
+      user: {
+        is: {
+          status: "ACTIVE",
+        },
+      },
+    },
+
+    select: {
+      id: true,
+      ipAddress: true,
+      userAgent: true,
+      deviceName: true,
+      createdAt: true,
+      lastSeenAt: true,
+      expiresAt: true,
+    },
+
+    orderBy: {
+      lastSeenAt: "desc",
+    },
+  });
+
+  return sessions;
+}
+
 /**
  * Calculate the absolute session expiration.
  */
