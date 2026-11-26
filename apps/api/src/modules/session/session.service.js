@@ -30,6 +30,11 @@ const revokeSessionInputSchema = z.object({
     .default("USER_LOGOUT"),
 });
 
+const revokeOtherSessionsInputSchema = z.object({
+  userId: z.string().uuid(),
+  currentSessionId: z.string().uuid(),
+});
+
 /**
  * List all currently active sessions belonging to a user.
  *
@@ -158,6 +163,98 @@ export async function revokeSession(input) {
     return {
       success: true,
       alreadyRevoked: false,
+    };
+  });
+}
+
+export async function revokeOtherSessions(input) {
+  const validatedInput = revokeOtherSessionsInputSchema.parse(input);
+  const now = new Date();
+
+  return prisma.$transaction(async (tx) => {
+    // Verify that the current session belongs to the user
+    // and is still active.
+    const currentSession = await tx.session.findFirst({
+      where: {
+        id: validatedInput.currentSessionId,
+        userId: validatedInput.userId,
+        revokedAt: null,
+        expiresAt: {
+          gt: now,
+        },
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!currentSession) {
+      return {
+        success: false,
+        revokedCount: 0,
+      };
+    }
+
+    // Find every other active, non-expired session.
+    const otherSessions = await tx.session.findMany({
+      where: {
+        userId: validatedInput.userId,
+        id: {
+          not: validatedInput.currentSessionId,
+        },
+        revokedAt: null,
+        expiresAt: {
+          gt: now,
+        },
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (otherSessions.length === 0) {
+      return {
+        success: true,
+        revokedCount: 0,
+      };
+    }
+
+    const sessionIds = otherSessions.map((session) => session.id);
+
+    // Revoke the other sessions.
+    const revokedSessions = await tx.session.updateMany({
+      where: {
+        id: {
+          in: sessionIds,
+        },
+        userId: validatedInput.userId,
+        revokedAt: null,
+        expiresAt: {
+          gt: now,
+        },
+      },
+      data: {
+        revokedAt: now,
+        revokeReason: "USER_LOGOUT",
+      },
+    });
+
+    // Revoke refresh tokens associated with those sessions.
+    await tx.refreshToken.updateMany({
+      where: {
+        sessionId: {
+          in: sessionIds,
+        },
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: now,
+      },
+    });
+
+    return {
+      success: true,
+      revokedCount: revokedSessions.count,
     };
   });
 }

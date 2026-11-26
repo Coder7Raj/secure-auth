@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { hashRefreshToken } from "../../lib/refresh-token.js";
 
@@ -21,8 +21,13 @@ if (
 
 // Import database-dependent modules only after the guard.
 const { prisma } = await import("../../lib/prisma.js");
-const { createSession, rotateRefreshToken, listActiveSessions, revokeSession } =
-  await import("./session.service.js");
+const {
+  createSession,
+  rotateRefreshToken,
+  listActiveSessions,
+  revokeSession,
+  revokeOtherSessions,
+} = await import("./session.service.js");
 
 describe("Session service integration tests", () => {
   let testUser;
@@ -53,6 +58,121 @@ describe("Session service integration tests", () => {
     } finally {
       await prisma.$disconnect();
     }
+  });
+
+  beforeEach(async () => {
+    if (!testUser) return;
+
+    await prisma.refreshToken.deleteMany({
+      where: {
+        session: {
+          userId: testUser.id,
+        },
+      },
+    });
+
+    await prisma.session.deleteMany({
+      where: {
+        userId: testUser.id,
+      },
+    });
+  });
+
+  describe("Active session listing", () => {
+    it("should list active sessions belonging to the user", async () => {
+      const first = await createSession({
+        userId: testUser.id,
+        deviceName: "Desktop",
+      });
+
+      const second = await createSession({
+        userId: testUser.id,
+        deviceName: "Mobile",
+      });
+
+      const sessions = await listActiveSessions({
+        userId: testUser.id,
+      });
+
+      expect(sessions).toHaveLength(2);
+
+      expect(sessions.map((session) => session.id)).toEqual(
+        expect.arrayContaining([first.session.id, second.session.id]),
+      );
+    });
+
+    it("should exclude revoked sessions", async () => {
+      const initial = await createSession({
+        userId: testUser.id,
+      });
+
+      await prisma.session.update({
+        where: {
+          id: initial.session.id,
+        },
+        data: {
+          revokedAt: new Date(),
+          revokeReason: "USER_LOGOUT",
+        },
+      });
+
+      const sessions = await listActiveSessions({
+        userId: testUser.id,
+      });
+
+      expect(
+        sessions.some((session) => session.id === initial.session.id),
+      ).toBe(false);
+    });
+
+    it("should exclude expired sessions", async () => {
+      const initial = await createSession({
+        userId: testUser.id,
+      });
+
+      await prisma.session.update({
+        where: {
+          id: initial.session.id,
+        },
+        data: {
+          expiresAt: new Date(Date.now() - 60_000),
+        },
+      });
+
+      const sessions = await listActiveSessions({
+        userId: testUser.id,
+      });
+
+      expect(
+        sessions.some((session) => session.id === initial.session.id),
+      ).toBe(false);
+    });
+
+    it("should not expose refresh-token information", async () => {
+      await createSession({
+        userId: testUser.id,
+      });
+
+      const sessions = await listActiveSessions({
+        userId: testUser.id,
+      });
+
+      expect(sessions.length).toBeGreaterThan(0);
+
+      for (const session of sessions) {
+        expect(session).not.toHaveProperty("tokenHash");
+        expect(session).not.toHaveProperty("familyId");
+        expect(session).not.toHaveProperty("consumedAt");
+      }
+    });
+
+    it("should reject an invalid user ID", async () => {
+      await expect(
+        listActiveSessions({
+          userId: "invalid-user-id",
+        }),
+      ).rejects.toThrow();
+    });
   });
 
   // ==========================================
@@ -602,130 +722,257 @@ describe("Session service integration tests", () => {
       ).rejects.toThrow();
     });
   });
-});
 
-describe("Active session listing", () => {
-  let testUser;
+  describe("Revoke other sessions", () => {
+    it("should keep the current session active and revoke all other sessions", async () => {
+      const first = await createSession({ userId: testUser.id });
+      const second = await createSession({ userId: testUser.id });
+      const third = await createSession({ userId: testUser.id });
 
-  // Shared test user for all test suites.
-  beforeAll(async () => {
-    testUser = await prisma.user.create({
-      data: {
-        id: randomUUID(),
-        email: `session-test-${randomUUID()}@example.com`,
-        passwordHash: "integration-test-password-hash",
-        status: "ACTIVE",
-      },
-      select: {
-        id: true,
-      },
+      const result = await revokeOtherSessions({
+        userId: testUser.id,
+        currentSessionId: first.session.id,
+      });
+
+      expect(result).toEqual({
+        success: true,
+        revokedCount: 2,
+      });
+
+      const sessions = await prisma.session.findMany({
+        where: {
+          userId: testUser.id,
+          id: {
+            in: [first.session.id, second.session.id, third.session.id],
+          },
+        },
+      });
+
+      const currentSession = sessions.find(
+        (session) => session.id === first.session.id,
+      );
+
+      const otherSessions = sessions.filter(
+        (session) => session.id !== first.session.id,
+      );
+
+      expect(currentSession.revokedAt).toBeNull();
+
+      for (const session of otherSessions) {
+        expect(session.revokedAt).toBeInstanceOf(Date);
+        expect(session.revokeReason).toBe("USER_LOGOUT");
+      }
     });
-  });
 
-  // Clean up only after all nested test suites finish.
-  afterAll(async () => {
-    try {
-      if (testUser) {
+    it("should revoke associated refresh tokens while keeping the current token usable", async () => {
+      const first = await createSession({ userId: testUser.id });
+      const second = await createSession({ userId: testUser.id });
+      const third = await createSession({ userId: testUser.id });
+
+      const result = await revokeOtherSessions({
+        userId: testUser.id,
+        currentSessionId: first.session.id,
+      });
+
+      expect(result).toEqual({
+        success: true,
+        revokedCount: 2,
+      });
+
+      const tokens = await prisma.refreshToken.findMany({
+        where: {
+          sessionId: {
+            in: [first.session.id, second.session.id, third.session.id],
+          },
+        },
+      });
+
+      const currentTokens = tokens.filter(
+        (token) => token.sessionId === first.session.id,
+      );
+
+      const otherTokens = tokens.filter(
+        (token) => token.sessionId !== first.session.id,
+      );
+
+      expect(currentTokens.length).toBeGreaterThan(0);
+      expect(otherTokens.length).toBeGreaterThan(0);
+
+      for (const token of currentTokens) {
+        expect(token.revokedAt).toBeNull();
+      }
+
+      for (const token of otherTokens) {
+        expect(token.revokedAt).toBeInstanceOf(Date);
+      }
+
+      const rotated = await rotateRefreshToken({
+        token: first.refreshToken,
+      });
+
+      expect(rotated.session.id).toBe(first.session.id);
+      expect(rotated.refreshToken).toEqual(expect.any(String));
+    });
+
+    it("should not affect sessions belonging to another user", async () => {
+      const anotherUser = await prisma.user.create({
+        data: {
+          id: randomUUID(),
+          email: `session-test-${randomUUID()}@example.com`,
+          passwordHash: "integration-test-password-hash",
+          status: "ACTIVE",
+        },
+        select: { id: true },
+      });
+
+      try {
+        const current = await createSession({ userId: testUser.id });
+
+        const anotherUserSession = await createSession({
+          userId: anotherUser.id,
+        });
+
+        const result = await revokeOtherSessions({
+          userId: testUser.id,
+          currentSessionId: current.session.id,
+        });
+
+        expect(result).toEqual({
+          success: true,
+          revokedCount: 0,
+        });
+
+        const otherSession = await prisma.session.findUnique({
+          where: { id: anotherUserSession.session.id },
+        });
+
+        expect(otherSession.revokedAt).toBeNull();
+      } finally {
         await prisma.user.delete({
-          where: { id: testUser.id },
+          where: { id: anotherUser.id },
         });
       }
-    } finally {
-      await prisma.$disconnect();
-    }
-  });
-  it("should list active sessions belonging to the user", async () => {
-    const first = await createSession({
-      userId: testUser.id,
-      deviceName: "Desktop",
     });
 
-    const second = await createSession({
-      userId: testUser.id,
-      deviceName: "Mobile",
+    it("should handle a user with only one session", async () => {
+      const current = await createSession({ userId: testUser.id });
+
+      const result = await revokeOtherSessions({
+        userId: testUser.id,
+        currentSessionId: current.session.id,
+      });
+
+      expect(result).toEqual({
+        success: true,
+        revokedCount: 0,
+      });
+
+      const session = await prisma.session.findUnique({
+        where: { id: current.session.id },
+      });
+
+      expect(session.revokedAt).toBeNull();
     });
 
-    const sessions = await listActiveSessions({
-      userId: testUser.id,
+    it("should reject a nonexistent current session without revoking anything", async () => {
+      const first = await createSession({ userId: testUser.id });
+      const second = await createSession({ userId: testUser.id });
+
+      const result = await revokeOtherSessions({
+        userId: testUser.id,
+        currentSessionId: randomUUID(),
+      });
+
+      expect(result).toEqual({
+        success: false,
+        revokedCount: 0,
+      });
+
+      const sessions = await prisma.session.findMany({
+        where: {
+          userId: testUser.id,
+          id: {
+            in: [first.session.id, second.session.id],
+          },
+        },
+      });
+
+      for (const session of sessions) {
+        expect(session.revokedAt).toBeNull();
+      }
     });
 
-    expect(sessions).toHaveLength(2);
+    it("should handle repeated calls idempotently", async () => {
+      const current = await createSession({ userId: testUser.id });
+      const second = await createSession({ userId: testUser.id });
+      const third = await createSession({ userId: testUser.id });
 
-    expect(sessions.map((session) => session.id)).toEqual(
-      expect.arrayContaining([first.session.id, second.session.id]),
-    );
-  });
+      const firstResult = await revokeOtherSessions({
+        userId: testUser.id,
+        currentSessionId: current.session.id,
+      });
 
-  it("should exclude revoked sessions", async () => {
-    const initial = await createSession({
-      userId: testUser.id,
+      expect(firstResult).toEqual({
+        success: true,
+        revokedCount: 2,
+      });
+
+      const originalSessions = await prisma.session.findMany({
+        where: {
+          id: {
+            in: [current.session.id, second.session.id, third.session.id],
+          },
+        },
+      });
+
+      const originalRevocationTimes = new Map(
+        originalSessions.map((session) => [
+          session.id,
+          session.revokedAt?.getTime() ?? null,
+        ]),
+      );
+
+      const secondResult = await revokeOtherSessions({
+        userId: testUser.id,
+        currentSessionId: current.session.id,
+      });
+
+      expect(secondResult).toEqual({
+        success: true,
+        revokedCount: 0,
+      });
+
+      const updatedSessions = await prisma.session.findMany({
+        where: {
+          id: {
+            in: [current.session.id, second.session.id, third.session.id],
+          },
+        },
+      });
+
+      for (const session of updatedSessions) {
+        expect(session.revokedAt?.getTime() ?? null).toBe(
+          originalRevocationTimes.get(session.id),
+        );
+      }
     });
 
-    await prisma.session.update({
-      where: {
-        id: initial.session.id,
-      },
-      data: {
-        revokedAt: new Date(),
-        revokeReason: "USER_LOGOUT",
-      },
+    it("should reject invalid UUID inputs", async () => {
+      const current = await createSession({ userId: testUser.id });
+
+      await expect(
+        revokeOtherSessions({
+          userId: "invalid-user-id",
+          currentSessionId: current.session.id,
+        }),
+      ).rejects.toThrow();
+
+      await expect(
+        revokeOtherSessions({
+          userId: testUser.id,
+          currentSessionId: "invalid-session-id",
+        }),
+      ).rejects.toThrow();
     });
-
-    const sessions = await listActiveSessions({
-      userId: testUser.id,
-    });
-
-    expect(sessions.some((session) => session.id === initial.session.id)).toBe(
-      false,
-    );
-  });
-
-  it("should exclude expired sessions", async () => {
-    const initial = await createSession({
-      userId: testUser.id,
-    });
-
-    await prisma.session.update({
-      where: {
-        id: initial.session.id,
-      },
-      data: {
-        expiresAt: new Date(Date.now() - 60_000),
-      },
-    });
-
-    const sessions = await listActiveSessions({
-      userId: testUser.id,
-    });
-
-    expect(sessions.some((session) => session.id === initial.session.id)).toBe(
-      false,
-    );
-  });
-
-  it("should not expose refresh-token information", async () => {
-    await createSession({
-      userId: testUser.id,
-    });
-
-    const sessions = await listActiveSessions({
-      userId: testUser.id,
-    });
-
-    expect(sessions.length).toBeGreaterThan(0);
-
-    for (const session of sessions) {
-      expect(session).not.toHaveProperty("tokenHash");
-      expect(session).not.toHaveProperty("familyId");
-      expect(session).not.toHaveProperty("consumedAt");
-    }
-  });
-
-  it("should reject an invalid user ID", async () => {
-    await expect(
-      listActiveSessions({
-        userId: "invalid-user-id",
-      }),
-    ).rejects.toThrow();
   });
 });
