@@ -21,7 +21,7 @@ if (
 
 // Import database-dependent modules only after the guard.
 const { prisma } = await import("../../lib/prisma.js");
-const { createSession, rotateRefreshToken, listActiveSessions } =
+const { createSession, rotateRefreshToken, listActiveSessions, revokeSession } =
   await import("./session.service.js");
 
 describe("Session service integration tests", () => {
@@ -471,6 +471,135 @@ describe("Session service integration tests", () => {
       for (const token of tokens) {
         expect(token.revokedAt).toBeInstanceOf(Date);
       }
+    });
+  });
+
+  describe("Session revocation", () => {
+    it("should revoke a session and all its refresh tokens", async () => {
+      const initial = await createSession({
+        userId: testUser.id,
+      });
+
+      const rotated = await rotateRefreshToken({
+        token: initial.refreshToken,
+      });
+
+      const result = await revokeSession({
+        userId: testUser.id,
+        sessionId: initial.session.id,
+      });
+
+      expect(result).toEqual({
+        success: true,
+        alreadyRevoked: false,
+      });
+
+      const session = await prisma.session.findUnique({
+        where: {
+          id: initial.session.id,
+        },
+      });
+
+      const tokens = await prisma.refreshToken.findMany({
+        where: {
+          sessionId: initial.session.id,
+        },
+      });
+
+      expect(session.revokedAt).toBeInstanceOf(Date);
+      expect(session.revokeReason).toBe("USER_LOGOUT");
+
+      expect(tokens).toHaveLength(2);
+
+      for (const token of tokens) {
+        expect(token.revokedAt).toBeInstanceOf(Date);
+      }
+
+      await expect(
+        rotateRefreshToken({
+          token: rotated.refreshToken,
+        }),
+      ).rejects.toThrow("Invalid refresh token");
+    });
+
+    it("should reject revocation by a different user", async () => {
+      const initial = await createSession({
+        userId: testUser.id,
+      });
+
+      const result = await revokeSession({
+        userId: randomUUID(),
+        sessionId: initial.session.id,
+      });
+
+      expect(result).toEqual({
+        success: false,
+      });
+
+      const session = await prisma.session.findUnique({
+        where: {
+          id: initial.session.id,
+        },
+      });
+
+      expect(session.revokedAt).toBeNull();
+    });
+
+    it("should return false for a nonexistent session", async () => {
+      const result = await revokeSession({
+        userId: testUser.id,
+        sessionId: randomUUID(),
+      });
+
+      expect(result).toEqual({
+        success: false,
+      });
+    });
+
+    it("should be idempotent when revoking an already-revoked session", async () => {
+      const initial = await createSession({
+        userId: testUser.id,
+      });
+
+      const firstResult = await revokeSession({
+        userId: testUser.id,
+        sessionId: initial.session.id,
+      });
+
+      const originalSession = await prisma.session.findUnique({
+        where: {
+          id: initial.session.id,
+        },
+      });
+
+      const secondResult = await revokeSession({
+        userId: testUser.id,
+        sessionId: initial.session.id,
+      });
+
+      const updatedSession = await prisma.session.findUnique({
+        where: {
+          id: initial.session.id,
+        },
+      });
+
+      expect(firstResult.alreadyRevoked).toBe(false);
+      expect(secondResult.alreadyRevoked).toBe(true);
+
+      expect(updatedSession.revokedAt.getTime()).toBe(
+        originalSession.revokedAt.getTime(),
+      );
+
+      expect(updatedSession.revokeReason).toBe("USER_LOGOUT");
+    });
+
+    it("should reject an invalid session ID", async () => {
+      await expect(
+        revokeSession({
+          userId: testUser.id,
+          sessionId: "invalid-session-id",
+        }),
+      ).rejects.toThrow();
     });
   });
 });

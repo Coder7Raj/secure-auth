@@ -22,6 +22,14 @@ const listActiveSessionsInputSchema = z.object({
   userId: z.string().uuid(),
 });
 
+const revokeSessionInputSchema = z.object({
+  userId: z.string().uuid(),
+  sessionId: z.string().uuid(),
+  revokeReason: z
+    .enum(["USER_LOGOUT", "ADMIN_ACTION", "SECURITY_EVENT"])
+    .default("USER_LOGOUT"),
+});
+
 /**
  * List all currently active sessions belonging to a user.
  *
@@ -65,6 +73,93 @@ export async function listActiveSessions(input) {
   });
 
   return sessions;
+}
+
+/**
+ * Revoke a specific session belonging to a user.
+ *
+ * Session revocation and refresh-token revocation
+ * are performed atomically.
+ *
+ * Repeated revocation is idempotent.
+ */
+export async function revokeSession(input) {
+  const validatedInput = revokeSessionInputSchema.parse(input);
+
+  const now = new Date();
+
+  return prisma.$transaction(async (tx) => {
+    const session = await tx.session.findFirst({
+      where: {
+        id: validatedInput.sessionId,
+        userId: validatedInput.userId,
+      },
+      select: {
+        id: true,
+        revokedAt: true,
+      },
+    });
+
+    // Do not reveal whether another user's session exists.
+    if (!session) {
+      return {
+        success: false,
+      };
+    }
+
+    // Preserve the original revocation information.
+    if (session.revokedAt) {
+      await tx.refreshToken.updateMany({
+        where: {
+          sessionId: session.id,
+          revokedAt: null,
+        },
+        data: {
+          revokedAt: now,
+        },
+      });
+
+      return {
+        success: true,
+        alreadyRevoked: true,
+      };
+    }
+
+    const revoked = await tx.session.updateMany({
+      where: {
+        id: session.id,
+        userId: validatedInput.userId,
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: now,
+        revokeReason: validatedInput.revokeReason,
+      },
+    });
+
+    // Another request may have revoked the session first.
+    if (revoked.count !== 1) {
+      return {
+        success: true,
+        alreadyRevoked: true,
+      };
+    }
+
+    await tx.refreshToken.updateMany({
+      where: {
+        sessionId: session.id,
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: now,
+      },
+    });
+
+    return {
+      success: true,
+      alreadyRevoked: false,
+    };
+  });
 }
 
 /**

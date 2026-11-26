@@ -8,7 +8,7 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "dotenv -e .env.test -- vitest run",
     "db:format": "prisma format",
     "db:validate": "prisma validate",
     "db:generate": "prisma generate",
@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "dotenv-cli": "^11.1.0",
     "globals": "^17.14.0",
     "prisma": "^6.19.3",
     "vitest": "^5.1.1"
