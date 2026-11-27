@@ -3,45 +3,35 @@ import {
   COOKIE_NAMES,
   REFRESH_COOKIE_OPTIONS,
 } from "../../../config/cookies.js";
-
-import { AppError } from "../../../common/errors/app-error.js";
 import { signAccessToken } from "../../../lib/jwt.js";
 import { rotateRefreshToken } from "../../session/session.service.js";
 
 /**
- * Refresh the access token using the HTTP-only refresh token cookie.
+ * Handle refresh-token rotation.
  *
  * Responsibilities:
- * 1. Read the refresh token from the cookie.
+ * 1. Read the refresh token from its HTTP-only cookie.
  * 2. Rotate the refresh token.
- * 3. Generate a new access token.
+ * 3. Generate a new access JWT.
  * 4. Replace both authentication cookies.
- * 5. Return only safe session information.
+ * 5. Return safe session information.
  */
 export async function refreshController(req, res, next) {
   try {
     const refreshToken = req.cookies?.[COOKIE_NAMES.REFRESH_TOKEN];
 
     if (!refreshToken) {
-      throw new AppError("Invalid or expired refresh token.", 401);
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
     }
 
-    let result;
+    const result = await rotateRefreshToken({
+      token: refreshToken,
+    });
 
-    try {
-      result = await rotateRefreshToken({ token: refreshToken });
-    } catch (error) {
-      if (
-        error.message === "Invalid refresh token" ||
-        error.message === "Refresh token reuse detected"
-      ) {
-        throw new AppError("Invalid or expired refresh token.", 401);
-      }
-
-      throw error;
-    }
-
-    const accessToken = signAccessToken({
+    const accessToken = await signAccessToken({
       userId: result.session.userId,
       sessionId: result.session.id,
     });
@@ -56,13 +46,9 @@ export async function refreshController(req, res, next) {
 
     return res.status(200).json({
       success: true,
-      message: "Authentication tokens refreshed successfully.",
+      message: "Token refreshed successfully.",
       data: {
-        session: {
-          id: result.session.id,
-          userId: result.session.userId,
-          expiresAt: result.session.expiresAt,
-        },
+        session: result.session,
       },
     });
   } catch (error) {
