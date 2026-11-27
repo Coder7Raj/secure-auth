@@ -74,6 +74,33 @@ describe("loginUser", () => {
     mocks.createSession.mockResolvedValue(sessionResult);
   });
 
+  it("should reject login when the throttle limit is exceeded", async () => {
+    const retryAt = new Date(Date.now() + 60_000);
+
+    mocks.consumeLoginAttempt.mockResolvedValue({
+      allowed: false,
+      retryAt,
+    });
+
+    await expect(
+      loginUser(
+        {
+          email: activeUser.email,
+          password: "ValidPassword123!",
+        },
+        {
+          ipAddress: "127.0.0.1",
+        },
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 429,
+      retryAfterSeconds: expect.any(Number),
+    });
+
+    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.createSession).not.toHaveBeenCalled();
+  });
+
   it("should reject when the user does not exist", async () => {
     mocks.findUnique.mockResolvedValue(null);
     mocks.verifyPassword.mockResolvedValue(false);

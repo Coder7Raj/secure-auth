@@ -52,10 +52,19 @@ export async function loginUser(
   });
 
   if (!throttle.allowed) {
-    throw createAuthError(
+    const retryAfterSeconds = Math.max(
+      1,
+      Math.ceil((throttle.retryAt.getTime() - Date.now()) / 1000),
+    );
+
+    const error = createAuthError(
       "Too many login attempts. Please try again later.",
       429,
     );
+
+    error.retryAfterSeconds = retryAfterSeconds;
+
+    throw error;
   }
 
   const user = await prisma.user.findUnique({
