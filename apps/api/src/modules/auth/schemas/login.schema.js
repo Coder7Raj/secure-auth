@@ -7,8 +7,11 @@ export const loginSchema = z
       .trim()
       .toLowerCase()
       .email("Please provide a valid email address.")
-      .max(254, "Email must not exceed 254 characters."),
+      .max(254, "Email address is too long."),
 
-    password: z.string().max(128, "Password must not exceed 128 characters."),
+    password: z
+      .string()
+      .min(1, "Password is required.")
+      .max(128, "Password is too long."),
   })
   .strict();
