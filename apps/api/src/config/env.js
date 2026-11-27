@@ -47,6 +47,10 @@ const envSchema = z
     JWT_AUDIENCE: z.string().min(1).default("secure-auth-api"),
 
     SESSION_MAX_AGE_DAYS: z.coerce.number().int().positive().default(7),
+
+    COOKIE_SAME_SITE: z.enum(["strict", "lax", "none"]).default("lax"),
+
+    COOKIE_DOMAIN: z.string().optional(),
   })
   .superRefine((config, ctx) => {
     if (
@@ -67,6 +71,17 @@ const envSchema = z
     //     message: "Access and refresh JWT secrets must be different",
     //   });
     // }
+
+    if (
+      config.COOKIE_SAME_SITE === "none" &&
+      config.NODE_ENV !== "production"
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["COOKIE_SAME_SITE"],
+        message: "SameSite=None requires production HTTPS",
+      });
+    }
   });
 
 const result = envSchema.safeParse(process.env);
