@@ -79,6 +79,89 @@ describe("Session service integration tests", () => {
     });
   });
 
+  it("should rotate a valid refresh token", async () => {
+    const initial = await createSession({
+      userId: testUser.id,
+    });
+
+    const rotated = await rotateRefreshToken({
+      token: initial.refreshToken,
+    });
+
+    expect(rotated.refreshToken).toEqual(expect.any(String));
+
+    expect(rotated.refreshToken).not.toBe(initial.refreshToken);
+
+    expect(rotated.session.id).toBe(initial.session.id);
+
+    expect(rotated.session.userId).toBe(testUser.id);
+
+    const oldToken = await prisma.refreshToken.findUnique({
+      where: {
+        tokenHash: hashRefreshToken(initial.refreshToken),
+      },
+    });
+
+    expect(oldToken.consumedAt).not.toBeNull();
+
+    const newToken = await prisma.refreshToken.findUnique({
+      where: {
+        tokenHash: hashRefreshToken(rotated.refreshToken),
+      },
+    });
+
+    expect(newToken).not.toBeNull();
+    expect(newToken.consumedAt).toBeNull();
+
+    expect(newToken.familyId).toBe(oldToken.familyId);
+  });
+
+  it("should revoke the entire session when a consumed refresh token is reused", async () => {
+    const initial = await createSession({
+      userId: testUser.id,
+    });
+
+    // First use: rotation succeeds and consumes the original token.
+    const rotated = await rotateRefreshToken({
+      token: initial.refreshToken,
+    });
+
+    // Second use: presenting the consumed token must trigger reuse detection.
+    await expect(
+      rotateRefreshToken({
+        token: initial.refreshToken,
+      }),
+    ).rejects.toThrow(/reuse/i);
+
+    // The entire session must now be revoked.
+    const session = await prisma.session.findUnique({
+      where: { id: initial.session.id },
+    });
+
+    expect(session.revokedAt).not.toBeNull();
+    expect(session.revokeReason).toBe("REFRESH_TOKEN_REUSE");
+
+    // Every refresh token belonging to this session must be revoked.
+    const tokens = await prisma.refreshToken.findMany({
+      where: { sessionId: initial.session.id },
+    });
+
+    expect(tokens.length).toBe(2);
+
+    for (const token of tokens) {
+      expect(token.revokedAt).not.toBeNull();
+    }
+
+    // Confirm that the replacement token was also invalidated.
+    const replacementToken = await prisma.refreshToken.findUnique({
+      where: {
+        tokenHash: hashRefreshToken(rotated.refreshToken),
+      },
+    });
+
+    expect(replacementToken.revokedAt).not.toBeNull();
+  });
+
   describe("Active session listing", () => {
     it("should list active sessions belonging to the user", async () => {
       const first = await createSession({
