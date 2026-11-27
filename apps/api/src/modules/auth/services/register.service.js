@@ -1,29 +1,26 @@
+import argon2 from "argon2";
+
+import { AppError } from "../../../common/errors/app-error.js";
 import { prisma } from "../../../lib/prisma.js";
-import { hashPassword } from "./password.service.js";
 
-export async function registerUser(data) {
-  const email = data.email;
+export async function registerUser(input) {
+  const { email, password, firstName, lastName } = input;
 
-  const existingUser = await prisma.user.findUnique({
-    where: { email },
-    select: { id: true },
+  // Hash the password before storing it.
+  const passwordHash = await argon2.hash(password, {
+    type: argon2.argon2id,
+    memoryCost: 65536,
+    timeCost: 3,
+    parallelism: 1,
   });
-
-  if (existingUser) {
-    const error = new Error("An account with this email already exists.");
-    error.statusCode = 409;
-    throw error;
-  }
-
-  const passwordHash = await hashPassword(data.password);
 
   try {
     const user = await prisma.user.create({
       data: {
         email,
         passwordHash,
-        firstName: data.firstName,
-        lastName: data.lastName,
+        firstName,
+        lastName,
       },
       select: {
         id: true,
@@ -31,19 +28,25 @@ export async function registerUser(data) {
         firstName: true,
         lastName: true,
         status: true,
+        emailVerifiedAt: true,
         createdAt: true,
       },
     });
 
     return user;
   } catch (error) {
-    if (error.code === "P2002") {
-      const duplicateError = new Error(
-        "An account with this email already exists.",
-      );
+    // Handle duplicate email at the database constraint level.
+    // This also handles concurrent registration attempts safely.
+    if (error?.code === "P2002") {
+      const target = error.meta?.target;
 
-      duplicateError.statusCode = 409;
-      throw duplicateError;
+      const emailConflict =
+        target === "email" ||
+        (Array.isArray(target) && target.includes("email"));
+
+      if (emailConflict) {
+        throw new AppError("An account with this email already exists", 409);
+      }
     }
 
     throw error;
