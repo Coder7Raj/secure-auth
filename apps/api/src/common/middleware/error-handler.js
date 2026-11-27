@@ -6,9 +6,25 @@ export function notFoundHandler(req, res, _next) {
 }
 
 export function errorHandler(err, req, res, _next) {
-  const statusCode = err.statusCode || 500;
+  // Delegate if response headers have already been sent
+  if (res.headersSent) {
+    return _next(err);
+  }
 
-  if (statusCode === 429 && err.retryAfterSeconds) {
+  const rawStatusCode = err.statusCode ?? err.status;
+
+  const statusCode =
+    Number.isInteger(rawStatusCode) &&
+    rawStatusCode >= 400 &&
+    rawStatusCode <= 599
+      ? rawStatusCode
+      : 500;
+
+  if (
+    statusCode === 429 &&
+    Number.isInteger(err.retryAfterSeconds) &&
+    err.retryAfterSeconds > 0
+  ) {
     res.set("Retry-After", String(err.retryAfterSeconds));
   }
 
