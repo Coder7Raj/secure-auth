@@ -1,20 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  hash: vi.fn(),
-  verify: vi.fn(),
+  verifyPassword: vi.fn(),
   findUnique: vi.fn(),
   createLoginAttempt: vi.fn(),
   updateUser: vi.fn(),
   createSession: vi.fn(),
+  consumeLoginAttempt: vi.fn(),
+  resetAccountThrottle: vi.fn(),
 }));
 
-vi.mock("argon2", () => ({
-  default: {
-    argon2id: 2,
-    hash: mocks.hash,
-    verify: mocks.verify,
-  },
+vi.mock("./password.service.js", () => ({
+  hashPassword: vi.fn().mockResolvedValue("dummy-password-hash"),
+  verifyPassword: mocks.verifyPassword,
+}));
+
+vi.mock("./login-throttle.service.js", () => ({
+  consumeLoginAttempt: mocks.consumeLoginAttempt,
+  resetAccountThrottle: mocks.resetAccountThrottle,
 }));
 
 vi.mock("../../../lib/prisma.js", () => ({
@@ -56,8 +59,14 @@ describe("loginUser", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    mocks.hash.mockResolvedValue("dummy-password-hash");
-    mocks.verify.mockResolvedValue(true);
+    mocks.verifyPassword.mockResolvedValue(true);
+
+    mocks.consumeLoginAttempt.mockResolvedValue({
+      allowed: true,
+      retryAt: new Date(Date.now() + 15 * 60 * 1000),
+    });
+
+    mocks.resetAccountThrottle.mockResolvedValue(undefined);
 
     mocks.findUnique.mockResolvedValue(activeUser);
     mocks.createLoginAttempt.mockResolvedValue({});
@@ -67,7 +76,7 @@ describe("loginUser", () => {
 
   it("should reject when the user does not exist", async () => {
     mocks.findUnique.mockResolvedValue(null);
-    mocks.verify.mockResolvedValue(false);
+    mocks.verifyPassword.mockResolvedValue(false);
 
     await expect(
       loginUser({
@@ -79,12 +88,12 @@ describe("loginUser", () => {
       message: "Invalid email or password.",
     });
 
-    expect(mocks.verify).toHaveBeenCalled();
+    expect(mocks.verifyPassword).toHaveBeenCalled();
     expect(mocks.createSession).not.toHaveBeenCalled();
   });
 
   it("should reject when the password is incorrect", async () => {
-    mocks.verify.mockResolvedValue(false);
+    mocks.verifyPassword.mockResolvedValue(false);
 
     await expect(
       loginUser({
