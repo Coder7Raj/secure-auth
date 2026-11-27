@@ -35,6 +35,13 @@ const revokeOtherSessionsInputSchema = z.object({
   currentSessionId: z.string().uuid(),
 });
 
+const revokeAllSessionsInputSchema = z.object({
+  userId: z.string().uuid(),
+  revokeReason: z
+    .enum(["USER_LOGOUT", "ADMIN_ACTION", "SECURITY_EVENT"])
+    .default("USER_LOGOUT"),
+});
+
 /**
  * List all currently active sessions belonging to a user.
  *
@@ -240,6 +247,75 @@ export async function revokeOtherSessions(input) {
     });
 
     // Revoke refresh tokens associated with those sessions.
+    await tx.refreshToken.updateMany({
+      where: {
+        sessionId: {
+          in: sessionIds,
+        },
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: now,
+      },
+    });
+
+    return {
+      success: true,
+      revokedCount: revokedSessions.count,
+    };
+  });
+}
+
+/**
+ * Revoke all active sessions belonging to a user.
+ *
+ * All associated refresh tokens are revoked atomically.
+ */
+export async function revokeAllSessions(input) {
+  const validatedInput = revokeAllSessionsInputSchema.parse(input);
+
+  const now = new Date();
+
+  return prisma.$transaction(async (tx) => {
+    const activeSessions = await tx.session.findMany({
+      where: {
+        userId: validatedInput.userId,
+        revokedAt: null,
+        expiresAt: {
+          gt: now,
+        },
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (activeSessions.length === 0) {
+      return {
+        success: true,
+        revokedCount: 0,
+      };
+    }
+
+    const sessionIds = activeSessions.map((session) => session.id);
+
+    const revokedSessions = await tx.session.updateMany({
+      where: {
+        id: {
+          in: sessionIds,
+        },
+        userId: validatedInput.userId,
+        revokedAt: null,
+        expiresAt: {
+          gt: now,
+        },
+      },
+      data: {
+        revokedAt: now,
+        revokeReason: validatedInput.revokeReason,
+      },
+    });
+
     await tx.refreshToken.updateMany({
       where: {
         sessionId: {
