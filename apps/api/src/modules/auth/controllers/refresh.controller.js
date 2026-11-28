@@ -1,35 +1,47 @@
+import { AppError } from "../../../common/errors/app-error.js";
 import {
+  ACCESS_COOKIE_CLEAR_OPTIONS,
   ACCESS_COOKIE_OPTIONS,
   COOKIE_NAMES,
+  REFRESH_COOKIE_CLEAR_OPTIONS,
   REFRESH_COOKIE_OPTIONS,
 } from "../../../config/cookies.js";
 import { signAccessToken } from "../../../lib/jwt.js";
 import { rotateRefreshToken } from "../../session/session.service.js";
 
-/**
- * Handle refresh-token rotation.
- *
- * Responsibilities:
- * 1. Read the refresh token from its HTTP-only cookie.
- * 2. Rotate the refresh token.
- * 3. Generate a new access JWT.
- * 4. Replace both authentication cookies.
- * 5. Return safe session information.
- */
+const EXPECTED_REFRESH_FAILURES = new Set([
+  "Invalid refresh token",
+  "Refresh token reuse detected",
+  "SESSION_NO_LONGER_ACTIVE",
+]);
+
+function clearAuthenticationCookies(res) {
+  res.clearCookie(COOKIE_NAMES.ACCESS_TOKEN, ACCESS_COOKIE_CLEAR_OPTIONS);
+  res.clearCookie(COOKIE_NAMES.REFRESH_TOKEN, REFRESH_COOKIE_CLEAR_OPTIONS);
+}
+
 export async function refreshController(req, res, next) {
   try {
     const refreshToken = req.cookies?.[COOKIE_NAMES.REFRESH_TOKEN];
 
     if (!refreshToken) {
-      return res.status(401).json({
-        success: false,
-        message: "Authentication required.",
-      });
+      clearAuthenticationCookies(res);
+      return next(new AppError("Authentication required.", 401));
     }
 
-    const result = await rotateRefreshToken({
-      token: refreshToken,
-    });
+    let result;
+
+    try {
+      result = await rotateRefreshToken({ token: refreshToken });
+    } catch (error) {
+      if (EXPECTED_REFRESH_FAILURES.has(error?.message)) {
+        clearAuthenticationCookies(res);
+
+        return next(new AppError("Invalid or expired refresh token.", 401));
+      }
+
+      throw error;
+    }
 
     const accessToken = await signAccessToken({
       userId: result.session.userId,
@@ -37,7 +49,6 @@ export async function refreshController(req, res, next) {
     });
 
     res.cookie(COOKIE_NAMES.ACCESS_TOKEN, accessToken, ACCESS_COOKIE_OPTIONS);
-
     res.cookie(
       COOKIE_NAMES.REFRESH_TOKEN,
       result.refreshToken,
@@ -47,9 +58,7 @@ export async function refreshController(req, res, next) {
     return res.status(200).json({
       success: true,
       message: "Token refreshed successfully.",
-      data: {
-        session: result.session,
-      },
+      data: { session: result.session },
     });
   } catch (error) {
     return next(error);

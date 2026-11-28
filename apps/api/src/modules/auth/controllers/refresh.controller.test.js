@@ -13,6 +13,10 @@ vi.mock("../../../lib/jwt.js", () => ({
   signAccessToken: mocks.signAccessToken,
 }));
 
+import {
+  ACCESS_COOKIE_CLEAR_OPTIONS,
+  REFRESH_COOKIE_CLEAR_OPTIONS,
+} from "../../../config/cookies.js";
 import { refreshController } from "./refresh.controller.js";
 
 describe("refreshController", () => {
@@ -39,6 +43,7 @@ describe("refreshController", () => {
       status: vi.fn().mockReturnThis(),
       json: vi.fn().mockReturnThis(),
       cookie: vi.fn().mockReturnThis(),
+      clearCookie: vi.fn().mockReturnThis(),
     };
 
     next = vi.fn();
@@ -56,7 +61,14 @@ describe("refreshController", () => {
 
     await refreshController(req, res, next);
 
-    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Authentication required.",
+        statusCode: 401,
+      }),
+    );
+
+    expect(res.clearCookie).toHaveBeenCalledTimes(2);
     expect(mocks.rotateRefreshToken).not.toHaveBeenCalled();
     expect(mocks.signAccessToken).not.toHaveBeenCalled();
   });
@@ -121,18 +133,53 @@ describe("refreshController", () => {
     expect(body.data).not.toHaveProperty("accessToken");
   });
 
-  it("should forward refresh-token errors to Express", async () => {
-    const error = new Error("Invalid refresh token");
+  it.each([
+    "Invalid refresh token",
+    "Refresh token reuse detected",
+    "SESSION_NO_LONGER_ACTIVE",
+  ])(
+    "should convert expected refresh failure '%s' into a generic 401",
+    async (message) => {
+      mocks.rotateRefreshToken.mockRejectedValue(new Error(message));
+
+      await refreshController(req, res, next);
+
+      expect(next).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Invalid or expired refresh token.",
+          statusCode: 401,
+        }),
+      );
+
+      expect(res.clearCookie).toHaveBeenCalledTimes(2);
+      expect(res.clearCookie).toHaveBeenCalledWith(
+        "accessToken",
+        ACCESS_COOKIE_CLEAR_OPTIONS,
+      );
+      expect(res.clearCookie).toHaveBeenCalledWith(
+        "refreshToken",
+        REFRESH_COOKIE_CLEAR_OPTIONS,
+      );
+
+      expect(res.cookie).not.toHaveBeenCalled();
+      expect(res.json).not.toHaveBeenCalled();
+      expect(mocks.signAccessToken).not.toHaveBeenCalled();
+    },
+  );
+
+  it("should forward unexpected refresh-service errors unchanged", async () => {
+    const error = new Error("Database connection failed");
 
     mocks.rotateRefreshToken.mockRejectedValue(error);
 
     await refreshController(req, res, next);
 
     expect(next).toHaveBeenCalledWith(error);
+    expect(res.clearCookie).not.toHaveBeenCalled();
     expect(res.json).not.toHaveBeenCalled();
   });
 
-  it("should forward JWT signing errors to Express", async () => {
+  it("should forward JWT signing errors unchanged", async () => {
     const error = new Error("JWT signing failed");
 
     mocks.signAccessToken.mockRejectedValue(error);
