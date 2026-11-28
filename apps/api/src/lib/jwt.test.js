@@ -20,8 +20,8 @@ const { signAccessToken, verifyAccessToken } = await import("./jwt.js");
 const accessSecret = new TextEncoder().encode(process.env.JWT_ACCESS_SECRET);
 
 const testIdentity = {
-  userId: "user-123",
-  sessionId: "session-123",
+  userId: "11111111-1111-4111-8111-111111111111",
+  sessionId: "22222222-2222-4222-8222-222222222222",
 };
 
 async function createTestToken({
@@ -30,13 +30,15 @@ async function createTestToken({
   audience = "secure-auth-api",
   tokenType = "access",
   expiration = "15m",
+  userId = testIdentity.userId,
+  sessionId = testIdentity.sessionId,
 } = {}) {
   return new SignJWT({
-    sid: testIdentity.sessionId,
+    sid: sessionId,
     tokenType,
   })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
-    .setSubject(testIdentity.userId)
+    .setSubject(userId)
     .setIssuer(issuer)
     .setAudience(audience)
     .setIssuedAt()
@@ -104,16 +106,54 @@ describe("Access JWT utilities", () => {
     );
   });
 
+  it("should reject a correctly signed token with an invalid user UUID", async () => {
+    const token = await createTestToken({
+      userId: "user-123",
+    });
+
+    await expect(verifyAccessToken(token)).rejects.toThrow(
+      "Invalid JWT claims",
+    );
+  });
+
+  it("should reject a correctly signed token with an invalid session UUID", async () => {
+    const token = await createTestToken({
+      sessionId: "session-123",
+    });
+
+    await expect(verifyAccessToken(token)).rejects.toThrow(
+      "Invalid JWT claims",
+    );
+  });
+
   it("should reject a missing userId", async () => {
     await expect(
       signAccessToken({ sessionId: testIdentity.sessionId }),
-    ).rejects.toThrow("A valid userId is required");
+    ).rejects.toThrow("A valid userId UUID is required");
   });
 
   it("should reject a missing sessionId", async () => {
     await expect(
       signAccessToken({ userId: testIdentity.userId }),
-    ).rejects.toThrow("A valid sessionId is required");
+    ).rejects.toThrow("A valid sessionId UUID is required");
+  });
+
+  it("should reject a malformed userId when signing", async () => {
+    await expect(
+      signAccessToken({
+        userId: "user-123",
+        sessionId: testIdentity.sessionId,
+      }),
+    ).rejects.toThrow("A valid userId UUID is required");
+  });
+
+  it("should reject a malformed sessionId when signing", async () => {
+    await expect(
+      signAccessToken({
+        userId: testIdentity.userId,
+        sessionId: "session-123",
+      }),
+    ).rejects.toThrow("A valid sessionId UUID is required");
   });
 
   it("should reject an empty token", async () => {

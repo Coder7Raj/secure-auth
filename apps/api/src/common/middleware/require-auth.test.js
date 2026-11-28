@@ -80,6 +80,20 @@ describe("requireAuth middleware", () => {
     expect(findUnique).not.toHaveBeenCalled();
   });
 
+  it("should reject malformed JWT claims before querying Prisma", async () => {
+    verifyAccessToken.mockRejectedValue(new Error("Invalid JWT claims"));
+
+    await requireAuth(req, {}, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(next.mock.calls[0][0].statusCode).toBe(401);
+    expect(next.mock.calls[0][0].message).toBe(
+      "Invalid or expired access token",
+    );
+
+    expect(findUnique).not.toHaveBeenCalled();
+  });
+
   it("should reject a nonexistent session", async () => {
     findUnique.mockResolvedValue(null);
 
